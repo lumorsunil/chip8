@@ -1,0 +1,8 @@
+main:
+    set v0 = 0x10
+    set i = :edit
+    bcd v0
+infinite:
+    jmp :infinite
+edit:
+    # 

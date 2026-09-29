@@ -1,0 +1,6 @@
+main:
+    set i = :main
+    set v1 = mem
+    set i = :main2
+    set mem = v1
+main2:

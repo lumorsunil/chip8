@@ -1,0 +1,10 @@
+# timer test
+
+main:
+    set v5 = 0x03
+    set v6 = 0x05
+    set dt = v6
+    set v5 = dt
+    set st = v5
+infinite:
+    jmp :infinite

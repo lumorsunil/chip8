@@ -1,0 +1,14 @@
+main:
+    #dcl
+    set v0 = k
+    set i = :sprite_ball
+    dis v1 v2 0x5
+    jmp :main
+
+infinite:
+    jmp :infinite
+
+sprite_ball:
+    dat 0x15,0x64
+sprite_paddle:
+    dat 0x15,0x64

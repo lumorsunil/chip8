@@ -190,6 +190,10 @@ pub const Chip8Emulator = struct {
         rl.playAudioStream(self.audio_stream);
     }
 
+    pub fn currentInstructionAddr(self: *@This()) u12 {
+        return @truncate(self.pc +% 2);
+    }
+
     pub fn setup(self: *@This()) Error!void {
         self.initializeMemory();
         rl.initWindow(scaled_display_size[0], scaled_display_size[1], "Chip8 Emulator");
@@ -406,7 +410,7 @@ pub const Chip8Emulator = struct {
             const sprite = addr + y;
             const dx: u12 = self.V[r_offset_x] % display_size_u16[0];
             const dy: u12 = @as(u12, @intCast(y)) + (self.V[r_offset_y] % display_size_u16[1]);
-            const d_byte_idx = @divFloor(dx + dy * display_size_u16[0], 8);
+            const d_byte_idx: u16 = @divFloor(dx + dy * display_size_u16[0], 8);
             const display_ = display_start + d_byte_idx;
             if (display_ >= self.memory.len) return;
             const bit_offset: u3 = @truncate(dx % 8);
@@ -464,7 +468,14 @@ pub const Chip8Emulator = struct {
     pub fn decodeInstruction(self: *@This(), addr: u12) Error!?Instruction {
         @setEvalBranchQuota(10000);
 
-        const instr: RawInstruction = @bitCast(swapNibbles2(nibbleSwap(std.mem.readInt(u16, @ptrCast(self.memory[addr .. addr + 2]), .little))));
+        if (addr >= self.memory.len - 1) return null;
+        const instr_start: usize = addr;
+        const instr_end: usize = instr_start + 2;
+
+        const memory = self.memory[instr_start..instr_end];
+        const memory_read = std.mem.readInt(u16, @ptrCast(memory), .little);
+        const memory_swapped = swapNibbles2(nibbleSwap(memory_read));
+        const instr: RawInstruction = @bitCast(memory_swapped);
 
         inline for (std.meta.fields(Instruction)) |field| {
             const InstrType = field.type;

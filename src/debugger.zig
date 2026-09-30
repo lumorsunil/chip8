@@ -1,18 +1,25 @@
 const std = @import("std");
 const Chip8Emulator = @import("root.zig").Chip8Emulator;
 const StepEvent = Chip8Emulator.StepEvent;
+const rl = @import("raylib");
 
 pub const Debugger = struct {
     emulator: *Chip8Emulator,
     stdin: *std.Io.Reader,
     stdout: *std.Io.Writer,
     is_continuing: bool = false,
+    breakpoints: std.AutoHashMap(u12, void) = undefined,
 
     pub fn init(emulator: *Chip8Emulator, stdin: *std.Io.Reader, stdout: *std.Io.Writer) @This() {
         return .{ .emulator = emulator, .stdin = stdin, .stdout = stdout };
     }
 
     pub fn run(self: *@This()) Error!void {
+        var stack_allocator_buffer: [1024]u8 = undefined;
+        var stack_allocator = std.heap.FixedBufferAllocator.init(&stack_allocator_buffer);
+        const allocator = stack_allocator.allocator();
+        self.breakpoints = .init(allocator);
+
         try self.emulator.setup();
 
         debugger: while (true) {
@@ -20,7 +27,17 @@ pub const Debugger = struct {
             self.emulator.draw();
 
             if (self.is_continuing) {
+                if (rl.isKeyPressed(.f5)) {
+                    self.is_continuing = false;
+                    continue;
+                }
+
                 for (0..Chip8Emulator.instructions_per_frame) |_| {
+                    if (self.hasBreakpointAt(self.emulator.currentInstructionAddr())) {
+                        self.is_continuing = false;
+                        continue :debugger;
+                    }
+
                     switch (try self.emulator.step()) {
                         .cont => continue,
                         .done => break :debugger,
@@ -59,6 +76,17 @@ pub const Debugger = struct {
             return .stack;
         } else if (std.mem.eql(u8, command, "registers")) {
             return .registers;
+        } else if (std.mem.eql(u8, command, "bp")) {
+            const arg = split.next() orelse return Error.InvalidCommand;
+            const addr = std.fmt.parseInt(u12, arg, 16) catch |err| {
+                std.log.err("error parsing argument: {}", .{err});
+                return Error.InvalidCommand;
+            };
+            if (try self.emulator.decodeInstruction(addr)) |instr| {
+                const prefix = if (self.hasBreakpointAt(addr)) "   " else " B ";
+                try self.stdout.print("Toggled breakpoint:\n{s}[{x:03}] {f}\n", .{ prefix, addr, instr });
+            }
+            return .{ .breakpoint = .{ .addr = addr } };
         }
 
         try self.stdout.print("Unknown command \"{s}\"\n", .{command});
@@ -94,6 +122,10 @@ pub const Debugger = struct {
                 try self.stdout.writeByte('\n');
                 return .cont;
             },
+            .breakpoint => |bp| {
+                try self.toggleBreakpoint(bp.addr);
+                return .cont;
+            },
         };
     }
 
@@ -105,7 +137,9 @@ pub const Debugger = struct {
 
         for (start_instr..end_instr) |i| {
             if ((i - start_instr) % 2 == 1) continue;
-            const prefix = if (i == self.emulator.pc +% 2) " > " else "   ";
+            var prefix: [3]u8 = .{' '} ** 3;
+            if (i == self.emulator.pc +% 2) prefix[1] = '>';
+            if (self.hasBreakpointAt(@truncate(i))) prefix[2] = 'B';
             const instr = self.emulator.decodeInstruction(@truncate(i)) catch |err| switch (err) {
                 Chip8Emulator.Error.UnsupportedInstruction => {
                     const lo = self.emulator.memory[i];
@@ -124,10 +158,30 @@ pub const Debugger = struct {
         }
     }
 
+    fn hasBreakpointAt(self: @This(), addr: u12) bool {
+        return self.breakpoints.contains(addr);
+    }
+
+    fn toggleBreakpoint(self: *@This(), addr: u12) Error!void {
+        if (self.hasBreakpointAt(addr)) {
+            self.removeBreakpoint(addr);
+        } else {
+            try self.setBreakpoint(addr);
+        }
+    }
+
+    fn setBreakpoint(self: *@This(), addr: u12) Error!void {
+        return self.breakpoints.put(addr, {});
+    }
+
+    fn removeBreakpoint(self: *@This(), addr: u12) void {
+        _ = self.breakpoints.remove(addr);
+    }
+
     pub const Error = error{
         InvalidCommand,
         UnknownCommand,
-    } || std.Io.Reader.DelimiterError || std.Io.Writer.Error || Chip8Emulator.Error;
+    } || std.Io.Reader.DelimiterError || std.Io.Writer.Error || Chip8Emulator.Error || std.mem.Allocator.Error;
 };
 
 pub const Command = union(enum) {
@@ -135,6 +189,7 @@ pub const Command = union(enum) {
     cont: Continue,
     stack: Stack,
     registers: Registers,
+    breakpoint: Breakpoint,
     quit: Quit,
 
     pub fn format(
@@ -188,6 +243,17 @@ pub const Command = union(enum) {
             writer: *std.Io.Writer,
         ) std.Io.Writer.Error!void {
             try writer.print("registers", .{});
+        }
+    };
+
+    pub const Breakpoint = struct {
+        addr: u12,
+
+        pub fn format(
+            self: @This(),
+            writer: *std.Io.Writer,
+        ) std.Io.Writer.Error!void {
+            try writer.print("bp {x:03}", .{self.addr});
         }
     };
 };

@@ -7,6 +7,7 @@ const Options = struct {
     file: ?[]const u8 = null,
     debug: bool = false,
     emulator: chip8.EmulatorOptions = .{},
+    find_sound: bool = false,
 };
 
 fn printUsage() void {}
@@ -58,6 +59,8 @@ pub fn main(init: std.process.Init) !void {
             options.emulator.shift_behavior = .set_vx_to_vy;
         } else if (std.mem.eql(u8, arg, "--jump-with-offset")) {
             options.emulator.jump_with_offset_behavior = .vx_plus_addr;
+        } else if (std.mem.eql(u8, arg, "--find-sound")) {
+            options.find_sound = true;
         } else {
             options.file = arg;
         }
@@ -69,6 +72,7 @@ pub fn main(init: std.process.Init) !void {
         std.log.debug("\t--debug\tRun program with debugger.", .{});
         std.log.debug("\t--shift\tSets behavior of shift operation to set vx to vy.", .{});
         std.log.debug("\t--jump-with-offset\tSets behavior of jump with offset operation to add vx instead of v0.", .{});
+        std.log.debug("\t--list\tPrints the decoded ROM and exits.", .{});
         std.process.exit(1);
     };
 
@@ -88,7 +92,17 @@ pub fn main(init: std.process.Init) !void {
     var emulator = chip8.Chip8Emulator.init(init.io, options.emulator);
     emulator.loadProgram(file);
 
-    if (options.debug) {
+    if (options.find_sound) {
+        for (chip8.Chip8Emulator.program_start..emulator.memory.len) |i| {
+            const instr = try emulator.decodeInstruction(@truncate(i)) orelse continue;
+            if (instr == .set_st_to_v) {
+                std.log.debug("There is sound in this rom.", .{});
+                break;
+            }
+        } else {
+            std.log.debug("Could not find any sound instructions in this rom.", .{});
+        }
+    } else if (options.debug) {
         var debugger = chip8.Debugger.init(&emulator, stdin, stdout);
         debugger.run() catch |err| {
             std.log.err("Debugger Error: {}", .{err});

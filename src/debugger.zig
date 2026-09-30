@@ -104,7 +104,7 @@ pub const Debugger = struct {
         const end_instr = @min(self.emulator.pc +| (instruction_padding * 2), self.emulator.memory.len);
 
         for (start_instr..end_instr) |i| {
-            if (i % 2 == 1) continue;
+            if ((i - start_instr) % 2 == 1) continue;
             const prefix = if (i == self.emulator.pc +% 2) " > " else "   ";
             const instr = self.emulator.decodeInstruction(@truncate(i)) catch |err| switch (err) {
                 Chip8Emulator.Error.UnsupportedInstruction => {
@@ -114,6 +114,11 @@ pub const Debugger = struct {
                     continue;
                 },
                 else => return err,
+            } orelse {
+                const lo = self.emulator.memory[i];
+                const hi = self.emulator.memory[i + 1];
+                try self.stdout.print("{s}[{x}] {x} {x} <unsupported instruction>\n", .{ prefix, i, lo, hi });
+                continue;
             };
             try self.stdout.print("{s}[{x}] {f}\n", .{ prefix, i, instr });
         }

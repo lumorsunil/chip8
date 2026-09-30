@@ -211,8 +211,9 @@ pub const Chip8Emulator = struct {
     pub fn step(self: *@This()) Error!StepEvent {
         if (rl.windowShouldClose()) return .done;
         self.pc +%= 2;
-        const instr = try self.currentInstruction();
-        try self.executeInstruction(instr);
+        if (try self.currentInstruction()) |instr| {
+            try self.executeInstruction(instr);
+        }
         self.instruction_counter += 1;
         if (self.instruction_counter % instructions_per_frame == 0) {
             self.dt -|= 1;
@@ -453,14 +454,14 @@ pub const Chip8Emulator = struct {
         }
     };
 
-    fn currentInstruction(self: *@This()) Error!Instruction {
+    fn currentInstruction(self: *@This()) Error!?Instruction {
         return self.decodeInstruction(@truncate(self.pc));
     }
 
     const constant_instrs: []const std.meta.FieldEnum(Instruction) = &.{ .display_clear, .ret };
     const opcode_instrs: []const std.meta.FieldEnum(Instruction) = &.{ .set_v_to_v, .add_v_to_v, .or_vv, .and_vv, .xor_vv, .sub_vx_vy, .sub_vy_vx, .shift_left, .shift_right, .jump_if_key_down, .jump_if_key_up, .add_v_to_i, .set_i_to_font, .set_v_to_dt, .set_dt_to_v, .set_st_to_v, .set_v_to_key, .bcd, .set_v_to_mem, .set_mem_to_v };
 
-    pub fn decodeInstruction(self: *@This(), addr: u12) Error!Instruction {
+    pub fn decodeInstruction(self: *@This(), addr: u12) Error!?Instruction {
         @setEvalBranchQuota(10000);
 
         const instr: RawInstruction = @bitCast(swapNibbles2(nibbleSwap(std.mem.readInt(u16, @ptrCast(self.memory[addr .. addr + 2]), .little))));
@@ -498,11 +499,12 @@ pub const Chip8Emulator = struct {
             }
         }
 
-        std.log.err("Unsupported instruction: {x}", .{instr.instr});
-        const instr_as_bytes = std.mem.asBytes(&instr);
-        std.log.err("at ({x}): {x} {x}", .{ addr, self.memory[addr], self.memory[addr + 1] });
-        std.log.err("at ({x}): {x} {x}", .{ addr, instr_as_bytes[0], instr_as_bytes[1] });
-        return Error.UnsupportedInstruction;
+        // std.log.err("Unsupported instruction: {x}", .{instr.instr});
+        // const instr_as_bytes = std.mem.asBytes(&instr);
+        // std.log.err("at ({x}): {x} {x}", .{ addr, self.memory[addr], self.memory[addr + 1] });
+        // std.log.err("at ({x}): {x} {x}", .{ addr, instr_as_bytes[0], instr_as_bytes[1] });
+        // return Error.UnsupportedInstruction;
+        return null;
     }
 
     fn executeInstruction(self: *@This(), instruction: Instruction) Error!void {
@@ -537,7 +539,7 @@ pub const Chip8Emulator = struct {
             },
             .call => |call| {
                 try self.stackPush(self.pc);
-                self.pc = call.addr;
+                self.pc = call.addr -% 2;
             },
             .ret => self.pc = try self.stackPop(),
             .set_v_to_data => |set| self.V[set.reg] = set.data,

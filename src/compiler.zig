@@ -59,7 +59,7 @@ pub const Chip8AssemblyCompiler = struct {
                 },
             },
             .sbr => |sbr| .{ .call = .{
-                .addr = try self.evaluateValue12(sbr.addr),
+                .addr = try self.evaluateValue12(sbr.addr) -% 2,
             } },
             .ret => .{ .ret = .{} },
             .set => |set| switch (set.op) {

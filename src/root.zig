@@ -47,6 +47,85 @@ const default_font: []const u8 = &.{
 // 7    8       9       E
 // A    0       B       F
 
+const audio_sample_rate = 44100.0;
+const audio_sample_size = 32;
+const audio_buffer_size = 4096;
+const audio_freq = 440.0; // 440 - 500
+const audio_amp = 0.1;
+const audio_phase_increment = audio_freq / audio_sample_rate;
+const audio_square_width = 0.5;
+
+// #define SAMPLE_RATE 44100
+// #define BUFFER_SIZE 512
+// #define FREQUENCY   440.0f  // Standard A4 pitch
+// #define AMPLITUDE   0.2f    // Keep it low so it doesn't hurt your ears
+//
+// int main(void) {
+//     // 1. Initialize Window and Audio Device
+//     InitWindow(400, 200, "CHIP-8 Raylib Audio Example");
+//     InitAudioDevice();
+//     SetTargetFPS(60); // 60 FPS matches the CHIP-8 timer decrement rate
+//
+//     // 2. Set up Audio Stream (44.1kHz, 16-bit Mono)
+//     SetAudioStreamBufferSizeDefault(BUFFER_SIZE);
+//     AudioStream stream = LoadAudioStream(SAMPLE_RATE, 16, 1);
+//     PlayAudioStream(stream);
+//
+//     // Mock CHIP-8 Sound Timer (ST)
+//     uint8_t sound_timer = 0;
+//
+//     // Wave generation variables
+//     float phase = 0.0f;
+//     float phase_increment = FREQUENCY / SAMPLE_RATE;
+//     int16_t write_buffer[BUFFER_SIZE];
+//
+//     while (!WindowShouldClose()) {
+//         // --- 3. Mock CHIP-8 Input Logic ---
+//         if (IsKeyPressed(KEY_SPACE)) {
+//             sound_timer = 20; // Play a beep for ~0.33 seconds (20 / 60 frames)
+//         }
+//
+//         // --- 4. Decrement CHIP-8 Timer ---
+//         if (sound_timer > 0) {
+//             sound_timer--;
+//         }
+//
+//         // --- 5. Generate and Stream Audio ---
+//         if (IsAudioStreamProcessed(stream)) {
+//             for (int i = 0; i < BUFFER_SIZE; i++) {
+//                 if (sound_timer > 0) {
+//                     // Generate Square Wave: If phase < 0.5, output positive amplitude, else negative
+//                     write_buffer[i] = (phase < 0.5f) ? (int16_t)(AMPLITUDE * 32767) : (int16_t)(-AMPLITUDE * 32767);
+//
+//                     // Advance phase and wrap around 1.0
+//                     phase += phase_increment;
+//                     if (phase >= 1.0f) phase -= 1.0f;
+//                 } else {
+//                     // Silence when sound timer hits 0
+//                     write_buffer[i] = 0;
+//                     phase = 0.0f; // Reset phase to prevent pops when sound restarts
+//                 }
+//             }
+//
+//             // Push the generated samples to raylib's audio buffer
+//             UpdateAudioStream(stream, write_buffer, BUFFER_SIZE);
+//         }
+//
+//         // --- 6. Render ---
+//         BeginDrawing();
+//         ClearBackground(RAYWHITE);
+//         DrawText("Press SPACE to trigger CHIP-8 Beep", 40, 70, 18, DARKGRAY);
+//         DrawText(TextFormat("Sound Timer: %d", sound_timer), 40, 110, 20, sound_timer > 0 ? RED : MAROON);
+//         EndDrawing();
+//     }
+//
+//     // 7. Cleanup
+//     UnloadAudioStream(stream);
+//     CloseAudioDevice();
+//     CloseWindow();
+//
+//     return 0;
+
 pub const Chip8Emulator = struct {
     options: EmulatorOptions,
     /// 0x000–0x1FF (First 512 bytes): Reserved exclusively for the CHIP-8 interpreter software itself.
@@ -69,6 +148,8 @@ pub const Chip8Emulator = struct {
     instruction_counter: usize = 0,
     keypad: [0x10]bool = @splat(false),
     random_io: std.Random.IoSource,
+    audio_stream: rl.AudioStream = undefined,
+    audio_phase: f32 = 0,
 
     pub fn init(io: std.Io, options: EmulatorOptions) @This() {
         return .{ .options = options, .random_io = .{ .io = io } };
@@ -99,8 +180,14 @@ pub const Chip8Emulator = struct {
 
     fn initializeMemory(self: *@This()) void {
         @memcpy(self.memory[font_start..default_font.len], default_font);
-        self.pc = program_start;
+        self.pc = program_start -% 2;
         self.stackPointer().* = stack_start;
+    }
+
+    fn initializeAudio(self: *@This()) Error!void {
+        rl.setAudioStreamBufferSizeDefault(audio_buffer_size);
+        self.audio_stream = try rl.loadAudioStream(audio_sample_rate, audio_sample_size, 1);
+        rl.playAudioStream(self.audio_stream);
     }
 
     pub fn setup(self: *@This()) Error!void {
@@ -108,6 +195,7 @@ pub const Chip8Emulator = struct {
         rl.initWindow(scaled_display_size[0], scaled_display_size[1], "Chip8 Emulator");
         rl.initAudioDevice();
         rl.setTargetFPS(60);
+        try self.initializeAudio();
     }
 
     pub fn deinit(_: *@This()) void {
@@ -122,9 +210,9 @@ pub const Chip8Emulator = struct {
 
     pub fn step(self: *@This()) Error!StepEvent {
         if (rl.windowShouldClose()) return .done;
+        self.pc +%= 2;
         const instr = try self.currentInstruction();
         try self.executeInstruction(instr);
-        self.pc +%= 2;
         self.instruction_counter += 1;
         if (self.instruction_counter % instructions_per_frame == 0) {
             self.dt -|= 1;
@@ -154,12 +242,56 @@ pub const Chip8Emulator = struct {
         rl.endDrawing();
     }
 
+    pub fn updateAudio(self: *@This()) void {
+        var write_buffer: [audio_buffer_size]f32 = undefined;
+
+        if (rl.isAudioStreamProcessed(self.audio_stream)) {
+            for (0..audio_buffer_size) |i| {
+                if (self.st > 0) {
+                    const dir: f32 = if (self.audio_phase < audio_square_width) 1 else -1;
+                    const amp = dir * audio_amp;
+                    write_buffer[i] = amp;
+                    self.audio_phase += audio_phase_increment;
+                    if (self.audio_phase >= 1) {
+                        self.audio_phase -= 1;
+                    }
+                } else {
+                    write_buffer[i] = 0;
+                    self.audio_phase = 0;
+                }
+            }
+
+            rl.updateAudioStream(self.audio_stream, &write_buffer, audio_buffer_size);
+        }
+
+        //         if (IsAudioStreamProcessed(stream)) {
+        //             for (int i = 0; i < BUFFER_SIZE; i++) {
+        //                 if (sound_timer > 0) {
+        //                     // Generate Square Wave: If phase < 0.5, output positive amplitude, else negative
+        //                     write_buffer[i] = (phase < 0.5f) ? (int16_t)(AMPLITUDE * 32767) : (int16_t)(-AMPLITUDE * 32767);
+        //
+        //                     // Advance phase and wrap around 1.0
+        //                     phase += phase_increment;
+        //                     if (phase >= 1.0f) phase -= 1.0f;
+        //                 } else {
+        //                     // Silence when sound timer hits 0
+        //                     write_buffer[i] = 0;
+        //                     phase = 0.0f; // Reset phase to prevent pops when sound restarts
+        //                 }
+        //             }
+        //
+        //             // Push the generated samples to raylib's audio buffer
+        //             UpdateAudioStream(stream, write_buffer, BUFFER_SIZE);
+        //         }
+    }
+
     pub fn run(self: *@This()) Error!void {
         try self.setup();
         defer self.deinit();
 
         while (!rl.windowShouldClose()) {
             self.updateInput();
+            self.updateAudio();
             for (0..instructions_per_frame) |_| switch (try self.step()) {
                 .cont => continue,
                 .done => break,
@@ -405,7 +537,7 @@ pub const Chip8Emulator = struct {
             },
             .call => |call| {
                 try self.stackPush(self.pc);
-                self.pc = call.addr -% 2;
+                self.pc = call.addr;
             },
             .ret => self.pc = try self.stackPop(),
             .set_v_to_data => |set| self.V[set.reg] = set.data,
@@ -478,7 +610,7 @@ pub const Chip8Emulator = struct {
         }
     }
 
-    pub const Error = error{ StackOverflow, UnsupportedInstruction };
+    pub const Error = error{ StackOverflow, UnsupportedInstruction } || rl.RaylibError;
 };
 
 // 00E0 (clear screen)

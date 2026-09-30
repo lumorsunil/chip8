@@ -1,14 +1,8 @@
+setup:
+    set vA = 0x10
 main:
-    #dcl
     set v0 = k
-    set i = :sprite_ball
+    set i = fnt v0
     dis v1 v2 0x5
+    set st = vA
     jmp :main
-
-infinite:
-    jmp :infinite
-
-sprite_ball:
-    dat 0x15,0x64
-sprite_paddle:
-    dat 0x15,0x64
